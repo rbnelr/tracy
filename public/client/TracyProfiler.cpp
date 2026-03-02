@@ -84,6 +84,8 @@
 #include "TracySysTrace.hpp"
 #include "../tracy/TracyC.h"
 
+#include "../tracy/Tracy.hpp"
+
 #if defined TRACY_MANUAL_LIFETIME && !defined(TRACY_DELAYED_INIT)
 #  error "TRACY_MANUAL_LIFETIME requires enabled TRACY_DELAYED_INIT"
 #endif
@@ -139,6 +141,15 @@ extern char* __progname;
 
 namespace tracy
 {
+
+
+void TracySleep(int milliseconds) {
+    ZoneScopedC(tracy::Color::Tomato);
+    if (milliseconds > 0)
+        std::this_thread::sleep_for( std::chrono::milliseconds(milliseconds) );
+    else
+        std::this_thread::yield();
+}
 
 #ifdef __ANDROID__
 // Implementation helpers of EnsureReadable(address).
@@ -2067,8 +2078,9 @@ void Profiler::Worker()
                 }
                 else if( !m_sock->HasData() )
                 {
+                    ZoneScopedNC("tracy::Profiler::Worker[idle]", tracy::Color::DarkGray);
                     keepAlive++;
-                    std::this_thread::sleep_for( std::chrono::milliseconds( 10 ) );
+                    TracySleep(10);
                 }
             }
             else
@@ -3256,9 +3268,22 @@ void Profiler::SafeCopyEpilog( char* buf )
 
 bool Profiler::SendData( const char* data, size_t len )
 {
-    const lz4sz_t lz4sz = LZ4_compress_fast_continue( (LZ4_stream_t*)m_stream, data, m_lz4Buf + sizeof( lz4sz_t ), (int)len, LZ4Size, 1 );
-    memcpy( m_lz4Buf, &lz4sz, sizeof( lz4sz ) );
-    return m_sock->Send( m_lz4Buf, lz4sz + sizeof( lz4sz_t ) ) != -1;
+    ZoneScoped;
+    TracyAllocN( data, len, "Tracy Send" );
+    const lz4sz_t lz4sz = [&]() {
+        ZoneScopedNC("tracy::Profiler::SendData[compress]", tracy::Color::DarkGoldenrod4);
+        return LZ4_compress_fast_continue( (LZ4_stream_t*)m_stream, data, m_lz4Buf + sizeof( lz4sz_t ), (int)len, LZ4Size, 1 );
+    }();
+    bool status = [&]() {
+        ZoneScopedNC("tracy::Profiler::SendData[send]", tracy::Color::Crimson);
+        TracyAllocN( data, lz4sz, "Tracy Wire" );
+        memcpy( m_lz4Buf, &lz4sz, sizeof( lz4sz ) );
+        bool status = m_sock->Send( m_lz4Buf, lz4sz + sizeof( lz4sz_t ) ) != -1;
+        TracyFreeN( data, "Tracy Wire" );
+        return status;
+    }();
+    TracyFreeN( data, "Tracy Send" );
+    return status;
 }
 
 void Profiler::SendString( uint64_t str, const char* ptr, size_t len, QueueType type )
@@ -3405,6 +3430,9 @@ void Profiler::SendCallstackPayload( uint64_t _ptr )
 
 void Profiler::SendCallstackPayload64( uint64_t _ptr )
 {
+    ZoneScoped;
+    TracyPlot("TracyCallstackPayload", int64_t(0));
+    TracyPlot("TracyCallstackPayload", int64_t(1));
     auto ptr = (uint64_t*)_ptr;
 
     QueueItem item;
@@ -3420,6 +3448,8 @@ void Profiler::SendCallstackPayload64( uint64_t _ptr )
     AppendDataUnsafe( &item, QueueDataSize[(int)QueueType::CallstackPayload] );
     AppendDataUnsafe( &l16, sizeof( l16 ) );
     AppendDataUnsafe( ptr, sizeof( uint64_t ) * sz );
+    TracyPlot("TracyCallstackPayload", int64_t(1));
+    TracyPlot("TracyCallstackPayload", int64_t(0));
 }
 
 void Profiler::SendCallstackAlloc( uint64_t _ptr )
@@ -3501,6 +3531,8 @@ void Profiler::QueueSourceCodeQuery( uint32_t id )
 #ifdef TRACY_HAS_CALLSTACK
 void Profiler::HandleSymbolQueueItem( const SymbolQueueItem& si )
 {
+    ZoneScoped;
+
     switch( si.type )
     {
     case SymbolQueueItemType::CallstackFrame:
@@ -3631,7 +3663,7 @@ void Profiler::SymbolWorker()
                 return;
             }
             while( m_symbolQueue.front() ) m_symbolQueue.pop();
-            std::this_thread::sleep_for( std::chrono::milliseconds( 20 ) );
+            TracySleep(20);
             m_symbolsBusy.store( false, std::memory_order_release );
             continue;
         }
@@ -3644,12 +3676,13 @@ void Profiler::SymbolWorker()
         }
         else
         {
+            ZoneScopedNC("tracy::Profiler::SymbolWorker[idle]", tracy::Color::DarkGray);
             if( shouldExit )
             {
                 s_symbolThreadGone.store( true, std::memory_order_release );
                 return;
             }
-            std::this_thread::sleep_for( std::chrono::milliseconds( 20 ) );
+            TracySleep(20);
         }
     }
 }
@@ -3657,6 +3690,8 @@ void Profiler::SymbolWorker()
 
 bool Profiler::HandleServerQuery()
 {
+    ZoneScoped;
+
     ServerQueryPacket payload;
     if( !m_sock->Read( &payload, sizeof( payload ), 10 ) ) return false;
 
