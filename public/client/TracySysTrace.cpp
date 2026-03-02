@@ -3,6 +3,8 @@
 #include "TracySysTrace.hpp"
 #include "../common/TracySystem.hpp"
 
+#include "../tracy/Tracy.hpp"
+
 #ifdef TRACY_HAS_SYSTEM_TRACING
 
 #ifndef TRACY_SAMPLING_HZ
@@ -214,6 +216,7 @@ void WINAPI EventRecordCallback( PEVENT_RECORD record )
                 const uint64_t sz = ( record->UserDataLength - 16 ) / 8;
                 if( sz > 0 )
                 {
+                    ZoneScopedN("tracy::EventRecordCallback[StackWalkEvent]");
                     auto trace = (uint64_t*)tracy_malloc( ( 1 + sz ) * sizeof( uint64_t ) );
                     memcpy( trace, &sz, sizeof( uint64_t ) );
                     memcpy( trace+1, sw->stack, sizeof( uint64_t ) * sz );
@@ -473,6 +476,7 @@ bool SysTraceStart( int64_t& samplingPeriod )
 
 void SysTraceStop()
 {
+    ZoneScopedS(60);
     if( s_threadVsync )
     {
         CloseTrace( s_traceHandleVsync2 );
@@ -497,6 +501,7 @@ void SysTraceWorker( void* ptr )
 
 void SysTraceGetExternalName( uint64_t thread, const char*& threadName, const char*& name )
 {
+    ZoneScoped;
     bool threadSent = false;
     auto hnd = OpenThread( THREAD_QUERY_INFORMATION, FALSE, DWORD( thread ) );
     if( hnd == 0 )
