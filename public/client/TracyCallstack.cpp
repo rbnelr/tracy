@@ -9,6 +9,27 @@
 #include "../common/TracyAlloc.hpp"
 #include "../common/TracySystem.hpp"
 
+// Support user callback for symbol resolution
+// Useful for example for jitted code
+// Implementing DecodeCallstackPtrFast/DecodeSymbolAddress/DecodeCallstackPtr seperately so we can get best possible performance
+// Note the complicated owership rules on how strings must be returned
+// Simply set TRACY_HAS_USER_SYMBOLS in compiler, then include tracy/Tracy.hpp and define all tracy::UserDecode* somewhere in your code
+#if defined(TRACY_HAS_USER_SYMBOLS)
+namespace tracy
+{
+    // TODO: please double check if string alloc ownership is actually correct
+    
+    // full symbol name (has to copy into name_buf buffer)
+    extern bool UserDecodeCallstackPtrFast( uint64_t ptr, char* name_buf, size_t buf_size );
+    // fill result (Symbol base address + source info
+    // (file string can be persistent memory with needFree=false  or  CopyStringFast/tracy_malloc_fast via needFree=true)
+    extern bool UserDecodeSymbolAddress( uint64_t ptr, tracy::CallstackSymbolData* result );
+    // fill cb_data and reference in result
+    // (Symbol base address + size + name + source info + potential inline stack)
+    // (strings all have to be CopyStringFast/tracy_malloc_fast)
+    extern bool UserDecodeCallstackPtr( uint64_t ptr, tracy::CallstackEntryData* result, tracy::CallstackEntry* cb_data );
+}
+#endif
 
 #ifdef TRACY_HAS_CALLSTACK
 
@@ -571,9 +592,18 @@ void EndCallstack()
 
 const char* DecodeCallstackPtrFast( uint64_t ptr )
 {
+    static char ret[MaxNameSize];
+#if defined(TRACY_HAS_USER_SYMBOLS)
+    {
+        if( UserDecodeCallstackPtrFast( ptr, ret, sizeof(ret) ) )
+        {
+            return ret;
+        }
+    }
+#endif
+
     if( s_shouldResolveSymbolsOffline ) return "[unresolved]";
 
-    static char ret[MaxNameSize];
     const auto proc = GetCurrentProcess();
 
     char buf[sizeof( SYMBOL_INFO ) + MaxNameSize];
@@ -659,6 +689,12 @@ ModuleNameAndBaseAddress GetModuleNameAndPrepareSymbols( uint64_t addr )
 CallstackSymbolData DecodeSymbolAddress( uint64_t ptr )
 {
     CallstackSymbolData sym;
+#if defined(TRACY_HAS_USER_SYMBOLS)
+    if( UserDecodeSymbolAddress( ptr, &sym ) )
+    {
+        return sym;
+    }
+#endif
 
     if( s_shouldResolveSymbolsOffline )
     {
@@ -700,6 +736,16 @@ CallstackEntryData DecodeCallstackPtr( uint64_t ptr )
 #endif
 
     InitRpmalloc();
+
+#if defined(TRACY_HAS_USER_SYMBOLS)
+    {
+        CallstackEntryData res;
+        if( UserDecodeCallstackPtr( ptr, &res, cb_data ) )
+        {
+            return res;
+        }
+    }
+#endif
 
     const ModuleNameAndBaseAddress moduleNameAndAddress = GetModuleNameAndPrepareSymbols( ptr );
 
@@ -1144,6 +1190,15 @@ void EndCallstack()
 const char* DecodeCallstackPtrFast( uint64_t ptr )
 {
     static char ret[1024];
+#if defined(TRACY_HAS_USER_SYMBOLS)
+    {
+        if( UserDecodeCallstackPtrFast( ptr, ret, sizeof(ret) ) )
+        {
+            return ret;
+        }
+    }
+#endif
+
     auto vptr = (void*)ptr;
     const char* symname = nullptr;
     Dl_info dlinfo;
@@ -1193,6 +1248,13 @@ static void SymbolAddressErrorCb( void* data, const char* /*msg*/, int /*errnum*
 CallstackSymbolData DecodeSymbolAddress( uint64_t ptr )
 {
     CallstackSymbolData sym;
+#if defined(TRACY_HAS_USER_SYMBOLS)
+    if( UserDecodeSymbolAddress( ptr, &sym ) )
+    {
+        return sym;
+    }
+#endif
+
     if( cb_bts )
     {
         backtrace_pcinfo( cb_bts, ptr, SymbolAddressDataCb, SymbolAddressErrorCb, &sym );
@@ -1320,6 +1382,16 @@ CallstackEntryData DecodeCallstackPtr( uint64_t ptr )
     InitRpmalloc();
     if ( !IsKernelAddress( ptr ) )
     {
+    #if defined(TRACY_HAS_USER_SYMBOLS)
+        {
+            CallstackEntryData res;
+            if( UserDecodeCallstackPtr( ptr, &res, cb_data ) )
+            {
+                return res;
+            }
+        }
+    #endif
+
         const char* imageName = nullptr;
         uint64_t imageBaseAddress = 0x0;
 
@@ -1398,6 +1470,15 @@ void EndCallstack()
 const char* DecodeCallstackPtrFast( uint64_t ptr )
 {
     static char ret[1024];
+#if defined(TRACY_HAS_USER_SYMBOLS)
+    {
+        if( UserDecodeCallstackPtrFast( ptr, ret, sizeof(ret) ) )
+        {
+            return ret;
+        }
+    }
+#endif
+
     auto vptr = (void*)ptr;
     const char* symname = nullptr;
     Dl_info dlinfo;
@@ -1418,6 +1499,16 @@ const char* DecodeCallstackPtrFast( uint64_t ptr )
 
 CallstackSymbolData DecodeSymbolAddress( uint64_t ptr )
 {
+#if defined(TRACY_HAS_USER_SYMBOLS)
+    {
+        CallstackSymbolData sym;
+        if( UserDecodeSymbolAddress( ptr, &sym ) )
+        {
+            return sym;
+        }
+    }
+#endif
+
     const char* symloc = nullptr;
     Dl_info dlinfo;
     if( dladdr( (void*)ptr, &dlinfo ) ) symloc = dlinfo.dli_fname;
@@ -1427,6 +1518,16 @@ CallstackSymbolData DecodeSymbolAddress( uint64_t ptr )
 
 CallstackEntryData DecodeCallstackPtr( uint64_t ptr )
 {
+#if defined(TRACY_HAS_USER_SYMBOLS)
+    {
+        CallstackEntryData res;
+        if( UserDecodeCallstackPtr( ptr, &res, cb_data ) )
+        {
+            return res;
+        }
+    }
+#endif
+
     static CallstackEntry cb;
     cb.line = 0;
 
